@@ -1,8 +1,11 @@
 <script>
-/* App.html — Giao diện phía client (gọi server qua google.script.run) */
+/* App.html — Giao diện phía client (đăng nhập nội bộ — không cần Google) */
 var STATE = null;
+var TOKEN = localStorage.getItem('hsba_token') || '';
 
 function rpc(action, payload) {
+  payload = payload || {};
+  payload._token = TOKEN;
   return new Promise(function (resolve, reject) {
     google.script.run
       .withSuccessHandler(function (r) {
@@ -10,7 +13,7 @@ function rpc(action, payload) {
         else resolve(r);
       })
       .withFailureHandler(function (e) { reject(new Error(e && e.message ? e.message : String(e))); })
-      .api(action, payload || {});
+      .api(action, payload);
   });
 }
 function toast(msg, kind) {
@@ -25,16 +28,15 @@ function esc(s) {
     .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 function el(id) { return document.getElementById(id); }
-function view(html) { el('view').innerHTML = html; }
+function view(html) { document.getElementById('view').innerHTML = html; }
 function flash(msg, kind) { return '<div class="flash ' + (kind || 'info') + '">' + esc(msg) + '</div>'; }
 
 /* ---------------- điều hướng ---------------- */
 window.addEventListener('hashchange', route);
 function go(h) { location.hash = h; }
 function route() {
+  if (!STATE || STATE.needLogin) return renderLogin();
   var h = location.hash.replace(/^#/, '') || 'list';
-  if (!STATE) return;
-  if (STATE.notAllowed || STATE.noEmail) return renderBlocked();
   var parts = h.split('/');
   try {
     if (parts[0] === 'list') return renderList();
@@ -42,44 +44,89 @@ function route() {
     if (parts[0] === 'p' && parts[1] === 'edit') return renderForm(Number(parts[2]));
     if (parts[0] === 'p') return renderDetail(Number(parts[1]));
     if (parts[0] === 'admin') return renderAdmin();
+    if (parts[0] === 'password') return renderPassword();
     renderList();
   } catch (e) { toast(String(e.message || e), 'error'); }
 }
 
-/* ---------------- header ---------------- */
-function renderHeader() {
-  var nav = '';
-  nav += '<a onclick="go(\'list\')">Danh sách phiếu</a>';
-  if (STATE.user && (STATE.user.roles.indexOf('nhap') >= 0 || STATE.user.roles.indexOf('admin') >= 0))
-    nav += '<a onclick="go(\'new\')">＋ Tạo phiếu</a>';
-  if (STATE.user && STATE.user.roles.indexOf('admin') >= 0)
-    nav += '<a onclick="go(\'admin\')">Quản trị tài khoản</a>';
-  nav += '<a target="_blank" href="https://accounts.google.com/Logout">Đổi tài khoản</a>';
-  el('nav').innerHTML = nav;
-  if (STATE.user) {
-    var roles = STATE.user.roles.map(function (r) { return STATE.roles[r] || r; }).join(' · ');
-    el('userbox').innerHTML = '<div class="uname">' + esc(STATE.user.full_name) + '</div>' +
-      '<div class="urole">' + esc(roles) + '</div>' +
-      '<div class="urole">' + esc(STATE.email) + '</div>';
-  } else el('userbox').innerHTML = esc(STATE.email || '');
+/* ---------------- đăng nhập ---------------- */
+function renderLogin() {
+  document.getElementById('nav').innerHTML = '';
+  document.getElementById('userbox').innerHTML = '';
+  view('<div class="center-card"><div class="login-logo">📋</div>' +
+    '<h2>Quản lý đề nghị sửa<br>HSBA điện tử</h2>' +
+    '<p class="muted">Đăng nhập bằng tài khoản được cấp</p>' +
+    '<div class="paper-form" style="text-align:left;margin-top:16px">' +
+    '<label>Tài khoản<input id="lg_user" autocomplete="username" autofocus></label>' +
+    '<label>Mật khẩu<input id="lg_pass" type="password" autocomplete="current-password"></label>' +
+    '<button class="btn primary" style="width:100%" onclick="doLogin()">Đăng nhập</button></div></div>');
+  el('lg_pass').addEventListener('keydown', function (e) { if (e.key === 'Enter') doLogin(); });
+}
+async function doLogin() {
+  try {
+    var r = await new Promise(function (resolve, reject) {
+      google.script.run
+        .withSuccessHandler(function (x) { x && x.ok === false ? reject(new Error(x.error)) : resolve(x); })
+        .withFailureHandler(function (e) { reject(new Error(e.message || String(e))); })
+        .api('login', { username: el('lg_user').value, password: el('lg_pass').value });
+    });
+    TOKEN = r.token;
+    localStorage.setItem('hsba_token', TOKEN);
+    STATE.user = r.user;
+    STATE.needLogin = false;
+    toast('Chào mừng ' + r.user.full_name + '!', 'ok');
+    renderHeader();
+    go('list'); route();
+  } catch (e) { toast(e.message, 'error'); }
+}
+async function doLogout() {
+  try { await rpc('logout'); } catch (e) {}
+  TOKEN = '';
+  localStorage.removeItem('hsba_token');
+  STATE = null;
+  location.hash = '';
+  boot();
+}
+async function renderPassword() {
+  view('<div class="page-head"><h1>Đổi mật khẩu</h1></div>' +
+    '<div class="paper-form" style="max-width:460px">' +
+    '<label>Mật khẩu hiện tại<input id="pw_old" type="password" autocomplete="current-password"></label>' +
+    '<label>Mật khẩu mới <span class="muted">(tối thiểu 6 ký tự)</span><input id="pw_new" type="password" autocomplete="new-password"></label>' +
+    '<label>Nhập lại mật khẩu mới<input id="pw_new2" type="password" autocomplete="new-password"></label>' +
+    '<div class="form-actions"><button class="btn primary" onclick="savePassword()">Đổi mật khẩu</button>' +
+    '<a class="btn" onclick="go(\'list\')">Hủy</a></div></div>');
+}
+async function savePassword() {
+  if (el('pw_new').value !== el('pw_new2').value) { toast('Xác nhận mật khẩu không khớp.', 'error'); return; }
+  try {
+    await rpc('changePassword', { old_password: el('pw_old').value, new_password: el('pw_new').value });
+    toast('Đã đổi mật khẩu.', 'ok');
+    go('list');
+  } catch (e) { toast(e.message, 'error'); }
 }
 
-function renderBlocked() {
-  if (STATE.noEmail) {
-    view('<div class="center-card"><h2>Chưa xác định được tài khoản Google</h2>' +
-      '<p>Hãy đăng nhập tài khoản Google (Gmail) trên trình duyệt này rồi tải lại trang.</p></div>');
-    return;
-  }
-  view('<div class="center-card"><h2>🚫 Tài khoản chưa được cấp quyền</h2>' +
-    '<p>Email <b>' + esc(STATE.email) + '</b> chưa có trong danh sách tài khoản được phép sử dụng.</p>' +
-    '<p class="muted">Hãy liên hệ quản trị viên để được thêm vào hệ thống (mục Quản trị tài khoản).</p></div>');
+/* ---------------- header ---------------- */
+function renderHeader() {
+  var u = STATE.user;
+  var nav = '<a onclick="go(\'list\')">Danh sách phiếu</a>';
+  if (u.roles.indexOf('nhap') >= 0 || u.roles.indexOf('admin') >= 0)
+    nav += '<a onclick="go(\'new\')">＋ Tạo phiếu</a>';
+  if (u.roles.indexOf('admin') >= 0)
+    nav += '<a onclick="go(\'admin\')">Quản trị tài khoản</a>';
+  nav += '<a onclick="go(\'password\')">Đổi mật khẩu</a>';
+  nav += '<a onclick="doLogout()">Đăng xuất</a>';
+  document.getElementById('nav').innerHTML = nav;
+  document.getElementById('userbox').innerHTML =
+    '<div class="uname">' + esc(u.full_name) + '</div>' +
+    '<div class="urole">' + esc(u.roles.map(function (r) { return STATE.roles[r] || r; }).join(' · ')) + '</div>' +
+    '<div class="urole">TK: ' + esc(u.username) + '</div>';
 }
 
 /* ---------------- danh sách ---------------- */
 async function renderList() {
   view(flash('Đang tải danh sách…'));
-  var r = await rpc('list', { q: el('_q') ? el('_q').value : '', status: el('_st') ? el('_st').value : '' });
   var q = el('_q') ? el('_q').value : '', st = el('_st') ? el('_st').value : '';
+  var r = await rpc('list', { q: q, status: st });
   var opts = '<option value="">— Tất cả trạng thái —</option>';
   Object.keys(STATE.status).forEach(function (k) {
     opts += '<option value="' + k + '"' + (st === k ? ' selected' : '') + '>' + esc(STATE.status[k]) + '</option>';
@@ -122,16 +169,16 @@ async function renderForm(id) {
   var f = function (k) { return esc(v[k] || ''); };
   var opts = '<option value="">— Chọn người đề nghị —</option>';
   SELECT_USERS.forEach(function (u) {
-    opts += '<option value="' + esc(u.email) + '" data-name="' + esc(u.full_name) +
+    opts += '<option value="' + esc(u.username) + '" data-name="' + esc(u.full_name) +
       '" data-title="' + esc(u.title) + '" data-dept="' + esc(u.department) + '"' +
-      (String(v.requester_email || '').toLowerCase() === String(u.email).toLowerCase() ? ' selected' : '') +
-      '>' + esc(u.full_name) + ' (' + esc(u.email) + ')</option>';
+      (String(v.requester_email || '').toLowerCase() === String(u.username).toLowerCase() ? ' selected' : '') +
+      '>' + esc(u.full_name) + ' (' + esc(u.username) + ')</option>';
   });
   view('<div class="page-head"><h1>' + (id ? 'Sửa nội dung phiếu ' + esc(v.code) : 'Tạo giấy đề nghị sửa HSBA điện tử') + '</h1></div>' +
     '<div class="paper-form">' +
     '<h2 class="section">Người đề nghị</h2>' +
     '<div class="grid2"><label>Tài khoản người đề nghị *<select id="f_requester">' + opts + '</select></label>' +
-    '<div class="hint-box">Người này sẽ đăng nhập tài khoản Google của mình để tick xác nhận (ký với tư cách <b>NGƯỜI ĐỀ NGHỊ SỬA HSBA</b>).</div></div>' +
+    '<div class="hint-box">Người này sẽ đăng nhập tài khoản của mình để tick xác nhận (ký với tư cách <b>NGƯỜI ĐỀ NGHỊ SỬA HSBA</b>).</div></div>' +
     '<div class="grid3">' +
     '<label>Tôi tên *<input id="f_ten" value="' + f('ten_nguoi_nghi') + '"></label>' +
     '<label>Chức danh<input id="f_chucdanh" value="' + f('chuc_danh') + '"></label>' +
@@ -158,7 +205,7 @@ async function renderForm(id) {
     el('f_ten').value = o.dataset.name || '';
     el('f_chucdanh').value = o.dataset.title || '';
     el('f_khoa').value = o.dataset.dept || '';
-    if (el('f_ky')) el('f_ky').checked = (String(o.value).toLowerCase() === String(STATE.email).toLowerCase());
+    if (el('f_ky')) el('f_ky').checked = (String(o.value).toLowerCase() === String(STATE.user.username).toLowerCase());
   });
 }
 
@@ -202,7 +249,7 @@ async function renderDetail(id) {
     } else if (d.myAction === st) {
       body = '<div class="sig-form">' +
         '<label class="checkline"><input type="checkbox" id="ck_' + st + '"><span>' + esc(STATE.confirmTexts[st]) + '</span></label>' +
-        '<div class="whoami">Ký với tài khoản: <b>' + esc(STATE.email) + '</b> — ' + esc(STATE.user.full_name) + '</div>' +
+        '<div class="whoami">Ký với tài khoản: <b>' + esc(STATE.user.username) + '</b> — ' + esc(STATE.user.full_name) + '</div>' +
         '<textarea id="nt_' + st + '" rows="2" placeholder="' + esc(notePh[st]) + '"></textarea>' +
         '<div class="btns"><button class="btn primary" onclick="doConfirm(' + id + ',\'' + st + '\')">✓ Xác nhận &amp; Ký</button></div></div>' +
         ((st === 'khtb' || st === 'taichinh') ?
@@ -240,7 +287,7 @@ async function renderDetail(id) {
     '<div class="block"><span class="fl">Nội dung sai:</span><div class="pre">' + esc(x.noi_dung_sai) + '</div></div>' +
     '<div class="kdn">Kính đề nghị Ban KHTH cho sửa HSBA điện tử của người bệnh trên.</div></div></div>' +
     '<h2 class="section">4. Xác nhận / Ký điện tử</h2>' +
-    '<p class="muted small">Mỗi người <b>đăng nhập đúng tài khoản Google của mình</b> rồi tick xác nhận. Hệ thống lưu lại email, họ tên và thời gian xác nhận thay cho chữ ký tay.</p>' +
+    '<p class="muted small">Mỗi người <b>đăng nhập đúng tài khoản của mình</b> rồi tick xác nhận. Hệ thống lưu lại tài khoản, họ tên và thời gian xác nhận thay cho chữ ký tay.</p>' +
     '<div class="sig-grid">' + sigCards + '</div>' +
     '<h2 class="section">5. Lịch sử thao tác</h2><ol class="logs">' + (logs || '<li class="muted">Chưa có</li>') + '</ol>');
 }
@@ -305,8 +352,9 @@ async function viewPdf(id) {
 async function renderAdmin() {
   view(flash('Đang tải…'));
   var r = await rpc('users');
+  _allUsers = r.users;
   var rows = r.users.map(function (u) {
-    return '<tr><td><b>' + esc(u.email) + '</b></td><td>' + esc(u.full_name) + '</td><td>' + esc(u.title) + '</td>' +
+    return '<tr><td><b>' + esc(u.username) + '</b></td><td>' + esc(u.full_name) + '</td><td>' + esc(u.title) + '</td>' +
       '<td>' + esc(u.department) + '</td><td>' + u.roles.map(function (x) {
         return '<span class="badge role">' + esc(STATE.roles[x] || x) + '</span>';
       }).join(' ') + '</td>' +
@@ -315,8 +363,8 @@ async function renderAdmin() {
   }).join('');
   view('<div class="page-head"><h1>Quản trị tài khoản</h1>' +
     '<a class="btn primary" onclick="editUser(0)">＋ Thêm tài khoản</a></div>' +
-    '<p class="muted">Chỉ những email dưới đây mới đăng nhập được vào hệ thống (đăng nhập bằng tài khoản Google tương ứng).</p>' +
-    '<table class="list"><thead><tr><th>Email Google</th><th>Họ tên</th><th>Chức danh</th><th>Khoa/Phòng</th>' +
+    '<p class="muted">Chỉ những tài khoản dưới đây mới đăng nhập được. Admin cấp tài khoản + mật khẩu cho từng người.</p>' +
+    '<table class="list"><thead><tr><th>Tài khoản</th><th>Họ tên</th><th>Chức danh</th><th>Khoa/Phòng</th>' +
     '<th>Vai trò</th><th>Trạng thái</th><th></th></tr></thead><tbody>' + rows + '</tbody></table>' +
     '<div id="uf"></div>');
 }
@@ -330,12 +378,15 @@ async function editUser(id) {
     return '<label class="checkline"><input type="checkbox" id="ur_' + r + '"' + (on ? ' checked' : '') +
       '><span>' + esc(STATE.roles[r]) + '</span></label>';
   }).join('');
-  el('uf').innerHTML = '<h2 class="section">' + (u ? 'Sửa tài khoản: ' + esc(u.email) : 'Thêm tài khoản mới') + '</h2>' +
+  el('uf').innerHTML = '<h2 class="section">' + (u ? 'Sửa tài khoản: ' + esc(u.username) : 'Thêm tài khoản mới') + '</h2>' +
     '<div class="paper-form"><div class="grid2">' +
-    '<label>Email Google *<input id="u_email" value="' + f('email') + '" placeholder="ten@gmail.com"></label>' +
+    '<label>Tài khoản đăng nhập *<input id="u_username" value="' + f('username') + '" placeholder="vd: bsminh"></label>' +
     '<label>Họ và tên *<input id="u_name" value="' + f('full_name') + '"></label></div>' +
     '<div class="grid2"><label>Chức danh<input id="u_title" value="' + f('title') + '"></label>' +
     '<label>Khoa / Phòng<input id="u_dept" value="' + f('department') + '"></label></div>' +
+    '<label>Email (không bắt buộc)<input id="u_email" value="' + f('email') + '"></label>' +
+    '<label>Mật khẩu ' + (u ? '<span class="muted">(để trống nếu không đổi)</span>' : '*') +
+    '<input id="u_password" type="password" autocomplete="new-password"></label>' +
     '<h2 class="section">Vai trò / Quyền</h2>' + roleChk +
     '<label class="checkline"><input type="checkbox" id="u_active"' + (!u || u.active ? ' checked' : '') +
     '><span>Cho phép đăng nhập (khóa = bỏ tick)</span></label>' +
@@ -346,9 +397,9 @@ async function editUser(id) {
 async function saveUser(id) {
   try {
     var p = {
-      id: id || 0, email: el('u_email').value, full_name: el('u_name').value,
-      title: el('u_title').value, department: el('u_dept').value,
-      active: el('u_active').checked
+      id: id || 0, username: el('u_username').value, full_name: el('u_name').value,
+      title: el('u_title').value, department: el('u_dept').value, email: el('u_email').value,
+      password: el('u_password').value, active: el('u_active').checked
     };
     Object.keys(STATE.roles).forEach(function (r) { p['role_' + r] = el('ur_' + r).checked; });
     await rpc('saveUser', p);
@@ -359,13 +410,15 @@ async function saveUser(id) {
 }
 
 /* ---------------- khởi động ---------------- */
-(async function () {
+async function boot() {
   try {
     STATE = await rpc('state');
+    if (STATE.needLogin) { renderLogin(); return; }
     renderHeader();
     route();
   } catch (e) {
     view(flash('Lỗi khởi tạo: ' + e.message, 'error'));
   }
-})();
+}
+boot();
 </script>

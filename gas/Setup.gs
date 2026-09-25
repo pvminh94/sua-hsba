@@ -1,7 +1,6 @@
 /**
- * Setup.gs — CHẠY 1 LẦN ĐẦU TIÊN để tạo cơ sở dữ liệu (Google Sheets) + dữ liệu mẫu.
- * Cách chạy: mở Apps Script editor → chọn hàm setup → Run.
- * Người chạy setup sẽ trở thành ADMIN đầu tiên (email Google của bạn).
+ * Setup.gs — CHẠY 1 LẦN ĐẦU TIÊN (hoặc khi cần làm lại từ đầu) để tạo CSDL + dữ liệu mẫu.
+ * Người/chủ sở hữu chạy setup sẽ là ADMIN đầu tiên (tài khoản = email, mật khẩu mặc định: 123456).
  */
 var SHEET_USERS = 'Users';
 var SHEET_REQUESTS = 'Requests';
@@ -9,7 +8,8 @@ var SHEET_SIGNATURES = 'Signatures';
 var SHEET_LOGS = 'Logs';
 
 var HEADERS = {
-  Users: ['id', 'email', 'full_name', 'title', 'department', 'roles', 'active', 'created_at'],
+  Users: ['id', 'email', 'full_name', 'title', 'department', 'roles', 'active', 'created_at',
+    'username', 'password_hash', 'salt'],
   Requests: ['id', 'code', 'created_by_email', 'requester_email', 'ten_nguoi_nghi', 'chuc_danh', 'khoa',
     'ten_benh_nhan', 'nam_sinh', 'ma_kcb', 'ngay_vao_vien', 'ngay_ra_vien', 'ma_the_bhyt',
     'ly_do_sai', 'noi_dung_sai', 'status', 'ly_do_tra_lai', 'created_at', 'updated_at'],
@@ -34,17 +34,17 @@ function setup() {
     sh.setFrozenRows(1);
   });
   var def = ss.getSheetByName('Sheet1') || ss.getSheetByName('Trang tính1');
-  if (def) ss.deleteSheet(def);
+  if (def && ss.getSheets().length > 1) ss.deleteSheet(def);
 
-  // Admin đầu tiên = người đang chạy setup
-  var me = Session.getEffectiveUser().getEmail() || Session.getActiveUser().getEmail();
-  if (!me) throw new Error('Không xác định được email. Hãy đăng nhập Google rồi chạy lại setup.');
+  // Admin đầu tiên = chủ sở hữu dự án (chạy dưới quyền MYSELF)
+  var me = Session.getEffectiveUser().getEmail() || 'admin';
   if (readAll(SHEET_USERS).length === 0) {
+    var salt = newSalt();
     appendRow(SHEET_USERS, {
       id: 1, email: me, full_name: 'Quản trị viên', title: '', department: '',
-      roles: 'nhap,khtb,taichinh,admin', active: 1, created_at: now()
+      roles: 'nhap,khtb,taichinh,admin', active: 1, created_at: now(),
+      username: me, password_hash: hashPw(DEFAULT_PW, salt), salt: salt
     });
-    // 2 phiếu MẪU để xem quy trình (admin tự tick được cả 3 bước)
     appendRow(SHEET_REQUESTS, {
       id: 1, code: 'SDS-0001', created_by_email: me, requester_email: me,
       ten_nguoi_nghi: 'Quản trị viên', chuc_danh: '', khoa: 'Phòng Kế hoạch tổng hợp',
@@ -76,6 +76,5 @@ function setup() {
       action: 'Khởi tạo hệ thống', detail: 'Setup dữ liệu ban đầu', created_at: now()
     });
   }
-  Logger.log('SETUP XONG! Spreadsheet ID: ' + ss.getId());
-  Logger.log('Email admin đầu tiên: ' + me);
+  Logger.log('SETUP XONG! Spreadsheet ID: ' + ss.getId() + ' | Admin: ' + me + ' | Mật khẩu mặc định: ' + DEFAULT_PW);
 }
