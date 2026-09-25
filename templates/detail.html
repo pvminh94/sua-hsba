@@ -1,0 +1,121 @@
+{% extends "base.html" %}
+{% block title %}{{ req.code }} — Sửa HSBA điện tử{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Giấy đề nghị sửa HSBA điện tử <span class="code-big">{{ req.code }}</span></h1>
+  <div class="btns">
+    <a class="btn" href="{{ url_for('pdf', req_id=req.id) }}">⬇ Tải PDF (mẫu giấy)</a>
+    {% if can_edit %}
+    <a class="btn" href="{{ url_for('edit_request', req_id=req.id) }}">Sửa nội dung</a>
+    {% endif %}
+    {% if req.status == 'tra_lai' and can_edit %}
+    <form method="post" action="{{ url_for('resubmit', req_id=req.id) }}" class="inline">
+      <input type="hidden" name="csrf" value="{{ session.csrf }}">
+      <button class="btn primary" type="submit">Gửi lại</button>
+    </form>
+    {% endif %}
+    {% if can_delete %}
+    <form method="post" action="{{ url_for('delete_request', req_id=req.id) }}" class="inline"
+          onsubmit="return confirm('Chắc chắn xóa phiếu {{ req.code }}?');">
+      <input type="hidden" name="csrf" value="{{ session.csrf }}">
+      <button class="btn danger" type="submit">Xóa</button>
+    </form>
+    {% endif %}
+    <a class="btn" href="{{ url_for('index') }}">← Danh sách</a>
+  </div>
+</div>
+
+<p class="statusline">Trạng thái: <span class="badge s-{{ req.status }}">{{ STATUS.get(req.status, req.status) }}</span>
+{% if req.status == 'tra_lai' and req.ly_do_tra_lai %}
+  <span class="tra-lai-note">— Lý do trả lại: {{ req.ly_do_tra_lai }}</span>
+{% endif %}
+</p>
+
+<div class="paper">
+  <h2 class="section">1. Người đề nghị</h2>
+  <div class="fields">
+    <div><span class="fl">Tôi tên:</span><b>{{ req.ten_nguoi_nghi }}</b></div>
+    <div><span class="fl">Chức danh:</span>{{ req.chuc_danh or '—' }}</div>
+    <div><span class="fl">Khoa:</span>{{ req.khoa or '—' }}</div>
+  </div>
+
+  <h2 class="section">2. Hồ sơ bệnh án cần sửa</h2>
+  <div class="fields">
+    <div><span class="fl">Người bệnh:</span><b>{{ req.ten_benh_nhan }}</b></div>
+    <div><span class="fl">Năm sinh:</span>{{ req.nam_sinh or '—' }}</div>
+    <div><span class="fl">Mã KCB:</span>{{ req.ma_kcb or '—' }}</div>
+    <div><span class="fl">Vào viện:</span>{{ req.ngay_vao_vien or '—' }}</div>
+    <div><span class="fl">Ra viện:</span>{{ req.ngay_ra_vien or '—' }}</div>
+    <div><span class="fl">Mã thẻ BHYT:</span>{{ req.ma_the_bhyt or '—' }}</div>
+  </div>
+
+  <h2 class="section">3. Nội dung đề nghị</h2>
+  <div class="fields">
+    <div><span class="fl">Lý do sai:</span>{{ req.ly_do_sai }}</div>
+    <div class="block"><span class="fl">Nội dung sai:</span>
+      <div class="pre">{{ req.noi_dung_sai }}</div>
+    </div>
+    <div class="kdn">Kính đề nghị Ban KHTH cho sửa HSBA điện tử của người bệnh trên.</div>
+  </div>
+</div>
+
+<h2 class="section">4. Xác nhận / Ký điện tử</h2>
+<p class="muted small">Mỗi người <b>đăng nhập đúng tài khoản của mình</b> rồi tick xác nhận.
+Hệ thống lưu lại tài khoản, họ tên và thời gian xác nhận thay cho chữ ký tay.</p>
+
+<div class="sig-grid">
+  {% for st in ['de_nghi', 'khtb', 'taichinh'] %}
+  {% set sig = sigs.get(st) %}
+  <div class="sig-card {% if sig %}done{% elif my_action == st %}act{% else %}wait{% endif %}">
+    <div class="sig-title">
+      {% if st == 'de_nghi' %}①{% elif st == 'khtb' %}②{% else %}③{% endif %}
+      {{ SIG_TITLES[st] }}
+    </div>
+    {% if sig %}
+      <div class="sig-ok">✅ Đã xác nhận điện tử</div>
+      <div class="sig-info">
+        <div><b>{{ sig.full_name }}</b>{% if sig.title %} — {{ sig.title }}{% endif %}</div>
+        <div class="muted">Tài khoản: {{ sig.username or ('#' ~ sig.user_id) }} · Lúc: {{ sig.signed_at }}</div>
+        {% if sig.note %}<div class="sig-note">Ý kiến: {{ sig.note }}</div>{% endif %}
+      </div>
+    {% elif my_action == st %}
+      <form method="post" action="{{ url_for('confirm', req_id=req.id) }}" class="sig-form">
+        <input type="hidden" name="csrf" value="{{ session.csrf }}">
+        <input type="hidden" name="sig_type" value="{{ st }}">
+        <label class="checkline">
+          <input type="checkbox" name="xac_nhan" value="1" required>
+          <span>{{ CONFIRM_TEXT[st] }}</span>
+        </label>
+        <div class="whoami">Ký với tài khoản: <b>{{ cur_user.username }}</b> — {{ cur_user.full_name }}</div>
+        <textarea name="note" rows="2" placeholder="{% if st == 'taichinh' %}Ghi chú (số biên bản, mã giao dịch đã hủy…){% else %}Ý kiến (nếu có){% endif %}"></textarea>
+        <div class="btns">
+          <button class="btn primary" type="submit">✓ Xác nhận &amp; Ký</button>
+        </div>
+      </form>
+      {% if st in ['khtb', 'taichinh'] %}
+      <details class="tra-lai-box">
+        <summary>Trả lại phiếu</summary>
+        <form method="post" action="{{ url_for('return_request', req_id=req.id) }}">
+          <input type="hidden" name="csrf" value="{{ session.csrf }}">
+          <textarea name="ly_do" rows="2" required placeholder="Lý do trả lại…"></textarea>
+          <button class="btn danger" type="submit">Trả lại</button>
+        </form>
+      </details>
+      {% endif %}
+    {% else %}
+      <div class="sig-wait">⌛ Chờ xác nhận</div>
+    {% endif %}
+  </div>
+  {% endfor %}
+</div>
+
+<h2 class="section">5. Lịch sử thao tác</h2>
+<ol class="logs">
+  {% for lg in logs %}
+  <li>
+    <span class="log-time">{{ lg.created_at }}</span>
+    <b>{{ lg.full_name }}</b> ({{ lg.username }}) — {{ lg.action }}{% if lg.detail %}: {{ lg.detail }}{% endif %}
+  </li>
+  {% endfor %}
+</ol>
+{% endblock %}

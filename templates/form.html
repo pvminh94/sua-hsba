@@ -1,0 +1,109 @@
+{% extends "base.html" %}
+{% block title %}{{ 'Sửa phiếu' if mode == 'edit' else 'Tạo phiếu' }} — Sửa HSBA điện tử{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>{{ 'Sửa nội dung phiếu ' ~ req.code if mode == 'edit' else 'Tạo giấy đề nghị sửa HSBA điện tử' }}</h1>
+</div>
+
+<form method="post" class="paper-form">
+  <input type="hidden" name="csrf" value="{{ session.csrf }}">
+
+  <h2 class="section">Người đề nghị</h2>
+  <div class="grid2">
+    <label>Tài khoản người đề nghị *
+      <select name="requester_user_id" id="requester_user_id" required>
+        <option value="">— Chọn tài khoản —</option>
+        {% for u in users %}
+        <option value="{{ u.id }}" data-name="{{ u.full_name }}" data-title="{{ u.title }}" data-dept="{{ u.department }}"
+          {% if values.get('requester_user_id')|string == u.id|string %}selected{% endif %}>
+          {{ u.full_name }} ({{ u.username }})
+        </option>
+        {% endfor %}
+      </select>
+    </label>
+    <div class="hint-box">Người này sẽ đăng nhập tài khoản của mình để tick xác nhận
+      (ký với tư cách <b>NGƯỜI ĐỀ NGHỊ SỬA HSBA</b>).</div>
+  </div>
+  <div class="grid3">
+    <label>Tôi tên *
+      <input name="ten_nguoi_nghi" id="ten_nguoi_nghi" required value="{{ values.get('ten_nguoi_nghi','') }}">
+    </label>
+    <label>Chức danh
+      <input name="chuc_danh" id="chuc_danh" value="{{ values.get('chuc_danh','') }}">
+    </label>
+    <label>Khoa *
+      <input name="khoa" id="khoa" required value="{{ values.get('khoa','') }}">
+    </label>
+  </div>
+
+  <h2 class="section">Hồ sơ bệnh án cần sửa</h2>
+  <div class="grid2">
+    <label>Người bệnh *
+      <input name="ten_benh_nhan" required value="{{ values.get('ten_benh_nhan','') }}">
+    </label>
+    <label>Năm sinh
+      <input name="nam_sinh" value="{{ values.get('nam_sinh','') }}" placeholder="VD: 1985">
+    </label>
+  </div>
+  <div class="grid3">
+    <label>Mã KCB
+      <input name="ma_kcb" value="{{ values.get('ma_kcb','') }}">
+    </label>
+    <label>Vào viện
+      <input type="date" name="ngay_vao_vien" value="{{ values.get('ngay_vao_vien','') }}">
+    </label>
+    <label>Ra viện
+      <input type="date" name="ngay_ra_vien" value="{{ values.get('ngay_ra_vien','') }}">
+    </label>
+  </div>
+  <div class="grid2">
+    <label>Mã thẻ BHYT
+      <input name="ma_the_bhyt" value="{{ values.get('ma_the_bhyt','') }}">
+    </label>
+  </div>
+
+  <h2 class="section">Nội dung đề nghị</h2>
+  <label>Lý do sai *
+    <input name="ly_do_sai" required value="{{ values.get('ly_do_sai','') }}">
+  </label>
+  <label>Nội dung sai * <span class="muted">(phần cần sửa trong HSBA điện tử)</span>
+    <textarea name="noi_dung_sai" rows="5" required>{{ values.get('noi_dung_sai','') }}</textarea>
+  </label>
+
+  <div class="form-actions">
+    {% if mode == 'new' %}
+    <label class="checkline big">
+      <input type="checkbox" name="ky_ngay" value="1" id="ky_ngay" checked>
+      <span>Tôi chính là người đề nghị — <b>tick để xác nhận &amp; ký điện tử ngay</b> khi tạo phiếu
+        (lưu tài khoản + thời gian xác nhận)</span>
+    </label>
+    <button class="btn primary" type="submit">Tạo phiếu</button>
+    {% else %}
+    <button class="btn primary" type="submit">Lưu nội dung</button>
+    {% endif %}
+    <a class="btn" href="{{ url_for('index') }}">Hủy</a>
+  </div>
+</form>
+
+<script>
+(function () {
+  var sel = document.getElementById('requester_user_id');
+  var fTen = document.getElementById('ten_nguoi_nghi');
+  var fTtl = document.getElementById('chuc_danh');
+  var fDep = document.getElementById('khoa');
+  var ky = document.getElementById('ky_ngay');
+  function sync() {
+    var o = sel.options[sel.selectedIndex];
+    if (!o || !o.value) return;
+    if (o.dataset.name) fTen.value = o.dataset.name;
+    if (o.dataset.title) fTtl.value = o.dataset.title;
+    if (o.dataset.dept) fDep.value = o.dataset.dept;
+    if (ky) {
+      var me = {{ cur_user.id }};
+      ky.checked = (parseInt(o.value) === me);
+    }
+  }
+  sel.addEventListener('change', sync);
+})();
+</script>
+{% endblock %}

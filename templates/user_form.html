@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}{{ 'Sửa tài khoản' if u else 'Thêm tài khoản' }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>{{ 'Sửa tài khoản: ' ~ u.username if u else 'Thêm tài khoản mới' }}</h1>
+</div>
+<form method="post" class="paper-form">
+  <input type="hidden" name="csrf" value="{{ session.csrf }}">
+  <div class="grid2">
+    <label>Tên đăng nhập *
+      <input name="username" required value="{{ values.get('username', u.username if u else '') }}">
+    </label>
+    <label>Họ và tên *
+      <input name="full_name" required value="{{ values.get('full_name', u.full_name if u else '') }}">
+    </label>
+  </div>
+  <div class="grid2">
+    <label>Chức danh
+      <input name="title" value="{{ values.get('title', u.title if u else '') }}">
+    </label>
+    <label>Khoa / Phòng
+      <input name="department" value="{{ values.get('department', u.department if u else '') }}">
+    </label>
+  </div>
+  <label>Mật khẩu {% if not u %}*{% else %}<span class="muted">(để trống nếu không đổi)</span>{% endif %}
+    <input type="password" name="password" autocomplete="new-password" {% if not u %}required{% endif %}>
+  </label>
+
+  <h2 class="section">Vai trò / Quyền</h2>
+  {% set uroles = (values.get('roles', u.roles if u else '') or '').split(',') %}
+  {% for r, name in ROLES.items() %}
+  <label class="checkline">
+    <input type="checkbox" name="role_{{ r }}" value="1" {% if r in uroles %}checked{% endif %}>
+    <span>{{ name }}</span>
+  </label>
+  {% endfor %}
+
+  <label class="checkline">
+    <input type="checkbox" name="active" value="1" {% if values.get('active', u.active if u else 1)|string == '1' or not values and (u.active if u else 1) %}checked{% endif %}>
+    <span>Cho phép đăng nhập (khóa = bỏ tick)</span>
+  </label>
+
+  <div class="form-actions">
+    <button class="btn primary" type="submit">Lưu</button>
+    <a class="btn" href="{{ url_for('admin_users') }}">Hủy</a>
+  </div>
+</form>
+{% endblock %}

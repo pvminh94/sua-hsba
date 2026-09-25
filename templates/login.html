@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}Đăng nhập — Sửa HSBA điện tử{% endblock %}
+{% block content %}
+<div class="login-wrap">
+  <div class="login-card">
+    <div class="login-logo">📋</div>
+    <h1>Quản lý đề nghị sửa<br>hồ sơ bệnh án điện tử</h1>
+    <p class="muted">Chỉ tài khoản được cấp mới đăng nhập được</p>
+    <form method="post">
+      <input type="hidden" name="csrf" value="{{ session.csrf }}">
+      <label>Tên đăng nhập
+        <input name="username" autofocus required autocomplete="username">
+      </label>
+      <label>Mật khẩu
+        <input type="password" name="password" required autocomplete="current-password">
+      </label>
+      <button class="btn primary block" type="submit">Đăng nhập</button>
+    </form>
+  </div>
+</div>
+{% endblock %}

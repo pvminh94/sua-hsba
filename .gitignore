@@ -1,0 +1,14 @@
+# -*- coding: utf-8 -*-
+# Dữ liệu & bản PDF sinh ra không đưa lên git
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+data/
+exports/
+*.db
+*.db-wal
+*.db-shm
+secret_key.bin
+.DS_Store

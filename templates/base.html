@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Sửa HSBA điện tử{% endblock %}</title>
+  <meta name="csrf" content="{{ session.csrf }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+{% if cur_user %}
+<header class="topbar">
+  <div class="brand">
+    <span class="logo">📋</span>
+    <div>
+      <a href="{{ url_for('index') }}" class="brand-name">Quản lý đề nghị sửa HSBA điện tử</a>
+      <div class="brand-sub">Ban Kế hoạch tổng hợp</div>
+    </div>
+  </div>
+  <nav class="nav">
+    <a href="{{ url_for('index') }}">Danh sách phiếu</a>
+    {% if 'nhap' in cur_user.roles or 'admin' in cur_user.roles %}
+    <a href="{{ url_for('create_request') }}">＋ Tạo phiếu</a>
+    {% endif %}
+    {% if 'admin' in cur_user.roles %}
+    <a href="{{ url_for('admin_users') }}">Quản trị tài khoản</a>
+    {% endif %}
+    <a href="{{ url_for('change_password') }}">Đổi mật khẩu</a>
+  </nav>
+  <div class="userbox">
+    <div class="uname">{{ cur_user.full_name }}</div>
+    <div class="urole">
+      {% set rs = cur_user.roles.split(',') %}
+      {% for r in rs %}{{ ROLES.get(r, r) }}{% if not loop.last %} · {% endif %}{% endfor %}
+    </div>
+    <a class="logout" href="{{ url_for('logout') }}">Đăng xuất</a>
+  </div>
+</header>
+{% endif %}
+<main class="container">
+  {% with msgs = get_flashed_messages(with_categories=true) %}
+    {% for cat, m in msgs %}
+      <div class="flash {{ cat }}">{{ m }}</div>
+    {% endfor %}
+  {% endwith %}
+  {% block content %}{% endblock %}
+</main>
+</body>
+</html>
