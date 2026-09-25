@@ -7,12 +7,20 @@ function rpc(action, payload) {
   payload = payload || {};
   payload._token = TOKEN;
   return new Promise(function (resolve, reject) {
+    var done = false;
+    var timer = setTimeout(function () {
+      if (!done) { done = true; reject(new Error('Máy chủ phản hồi quá lâu — vui lòng bấm thử lại.')); }
+    }, 30000);
     google.script.run
       .withSuccessHandler(function (r) {
+        if (done) return; done = true; clearTimeout(timer);
         if (r && r.ok === false) reject(new Error(r.error || 'Lỗi không xác định'));
         else resolve(r);
       })
-      .withFailureHandler(function (e) { reject(new Error(e && e.message ? e.message : String(e))); })
+      .withFailureHandler(function (e) {
+        if (done) return; done = true; clearTimeout(timer);
+        reject(new Error(e && e.message ? e.message : String(e)));
+      })
       .api(action, payload);
   });
 }
@@ -62,14 +70,17 @@ function renderLogin() {
     '<button class="btn primary" style="width:100%" onclick="doLogin()">Đăng nhập</button></div></div>');
   el('lg_pass').addEventListener('keydown', function (e) { if (e.key === 'Enter') doLogin(); });
 }
-async function doLogin() {
-  try {
-    var r = await new Promise(function (resolve, reject) {
-      google.script.run
-        .withSuccessHandler(function (x) { x && x.ok === false ? reject(new Error(x.error)) : resolve(x); })
-        .withFailureHandler(function (e) { reject(new Error(e.message || String(e))); })
-        .api('login', { username: el('lg_user').value, password: el('lg_pass').value });
-    });
+function doLogin() {
+  var btn = event && event.target;
+  if (btn) btn.disabled = true;
+  var finish = function () { if (btn) btn.disabled = false; };
+  new Promise(function (resolve, reject) {
+    google.script.run
+      .withSuccessHandler(function (x) { x && x.ok === false ? reject(new Error(x.error)) : resolve(x); })
+      .withFailureHandler(function (e) { reject(new Error(e.message || String(e))); })
+      .api('login', { username: el('lg_user').value, password: el('lg_pass').value });
+  }).then(function (r) {
+    finish();
     TOKEN = r.token;
     localStorage.setItem('hsba_token', TOKEN);
     STATE.user = r.user;
@@ -77,7 +88,7 @@ async function doLogin() {
     toast('Chào mừng ' + r.user.full_name + '!', 'ok');
     renderHeader();
     go('list'); route();
-  } catch (e) { toast(e.message, 'error'); }
+  }).catch(function (e) { finish(); toast(e.message, 'error'); });
 }
 async function doLogout() {
   try { await rpc('logout'); } catch (e) {}

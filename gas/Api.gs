@@ -1,6 +1,7 @@
 /**
  * Api.js — Nghiệp vụ: đăng nhập nội bộ, tài khoản, phiếu, ký xác nhận 3 bước, quản trị.
- * Mọi quyền đều kiểm tra lại phía server (không chỉ ẩn nút trên giao diện).
+ * Tầng dữ liệu TỐI ƯU TỐC ĐỘ: cache (CacheService + PropertiesService), memo mỗi lượt gọi,
+ * bộ đếm id qua Properties (không đọc toàn bộ bảng), danh sách cache theo "phiên bản dữ liệu".
  */
 
 var ROLES = {
@@ -30,19 +31,27 @@ var STAGE_SIG = { cho_de_nghi: 'de_nghi', cho_khtb: 'khtb', cho_tc: 'taichinh' }
 var NEXT_STATUS = { de_nghi: 'cho_khtb', khtb: 'cho_tc', taichinh: 'hoan_tat' };
 var DEFAULT_PW = '123456';
 var SESSION_TTL = 21600; // 6 giờ
+var USERS_CACHE_TTL = 300;
 
-// ---------------- tiện ích CSDL (Google Sheets) ----------------
+// ================= TẦNG DỮ LIỆU (nhanh) =================
+var _memo = {}; // ghi nhớ trong 1 lượt gọi — mỗi bảng chỉ đọc 1 lần
+
+function props_() { return PropertiesService.getScriptProperties(); }
 function getDbId() {
-  var id = PropertiesService.getScriptProperties().getProperty('SPREADSHEET_ID');
+  var id = props_().getProperty('SPREADSHEET_ID');
   if (!id) throw new Error('Chưa khởi tạo dữ liệu.');
   return id;
 }
+function db_() {
+  if (!_memo.ss) _memo.ss = SpreadsheetApp.openById(getDbId());
+  return _memo.ss;
+}
 function sheetByName(name) {
-  var sh = SpreadsheetApp.openById(getDbId()).getSheetByName(name);
+  var sh = db_().getSheetByName(name);
   if (!sh) throw new Error('Thiếu sheet ' + name);
   return sh;
 }
-function readAll(name) {
+function readAllRaw_(name) {
   var values = sheetByName(name).getDataRange().getValues();
   if (values.length < 2) return [];
   var headers = values[0];
@@ -53,27 +62,64 @@ function readAll(name) {
       return o;
     });
 }
+/** Đọc bảng: ghi nhớ trong lượt gọi; useCache=true thì dùng CacheService (bảng Users). */
+function readAll(name, useCache) {
+  if (_memo['t_' + name]) return _memo['t_' + name];
+  var rows = null;
+  if (useCache) {
+    var hit = CacheService.getScriptCache().get('tbl_' + name);
+    if (hit) rows = JSON.parse(hit);
+  }
+  if (!rows) {
+    rows = readAllRaw_(name);
+    if (useCache) {
+      try { CacheService.getScriptCache().put('tbl_' + name, JSON.stringify(rows), USERS_CACHE_TTL); } catch (e) {}
+    }
+  }
+  _memo['t_' + name] = rows;
+  return rows;
+}
+function invalidate_(name) {
+  delete _memo['t_' + name];
+  CacheService.getScriptCache().remove('tbl_' + name);
+}
+/** Tăng "phiên bản dữ liệu" — mọi cache danh sách theo phiên bản sẽ tự đổi. */
+function bumpVer_() {
+  var v = Number(props_().getProperty('ver') || '0') + 1;
+  props_().setProperty('ver', String(v));
+  return v;
+}
+function getVer_() { return Number(props_().getProperty('ver') || '0'); }
+
+/** ID tự tăng — dùng Properties (không đọc toàn bộ bảng). */
 function nextId(name) {
-  var max = 0;
-  readAll(name).forEach(function (r) { if (Number(r.id) > max) max = Number(r.id); });
-  return max + 1;
+  var key = 'seq_' + name;
+  var v = Number(props_().getProperty(key) || '0');
+  if (!v) {
+    readAll(name).forEach(function (r) { if (Number(r.id) > v) v = Number(r.id); });
+  }
+  v += 1;
+  props_().setProperty(key, String(v));
+  return v;
 }
 function appendRow(name, obj) {
   var headers = HEADERS[name];
   sheetByName(name).appendRow(headers.map(function (h) {
     return obj[h] === undefined ? '' : obj[h];
   }));
+  _memo = _memo; // giữ memo (bảng vừa ghi chỉ dùng khi đọc lại cùng lượt — hiếm)
 }
 function updateById(name, id, fields) {
   var sh = sheetByName(name);
-  var values = sh.getDataRange().getValues();
-  var headers = values[0];
-  for (var r = 1; r < values.length; r++) {
-    if (Number(values[r][0]) === Number(id)) {
-      headers.forEach(function (h, c) {
-        if (h && fields.hasOwnProperty(h)) values[r][c] = fields[h];
-      });
-      sh.getRange(r + 1, 1, 1, headers.length).setValues([values[r]]);
+  var last = sh.getLastRow();
+  if (last < 2) return false;
+  var ids = sh.getRange(1, 1, last, 1).getValues();
+  for (var r = 1; r < last; r++) {
+    if (Number(ids[r][0]) === Number(id)) {
+      var headers = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0];
+      var row = sh.getRange(r + 1, 1, 1, headers.length).getValues()[0];
+      headers.forEach(function (h, c) { if (h && fields.hasOwnProperty(h)) row[c] = fields[h]; });
+      sh.getRange(r + 1, 1, 1, headers.length).setValues([row]);
       return true;
     }
   }
@@ -98,9 +144,10 @@ function withLock(fn) {
 function now() {
   return Utilities.formatDate(new Date(), 'Asia/Ho_Chi_Minh', 'yyyy-MM-dd HH:mm:ss');
 }
+/** Nhật ký — id theo thời gian (không cần đọc bảng để lấy id). */
 function addLog(requestId, user, action, detail) {
   appendRow(SHEET_LOGS, {
-    id: nextId(SHEET_LOGS), request_id: requestId || '',
+    id: Date.now(), request_id: requestId || '',
     user_email: (user && (user.username || user.email)) || '',
     full_name: (user && user.full_name) || '', action: action, detail: detail || '', created_at: now()
   });
@@ -114,7 +161,7 @@ function identMatch(a, u) {
          s === String(u.email || '').toLowerCase().trim();
 }
 
-// ---------------- mật khẩu & phiên ----------------
+// ================= MẬT KHẨU & PHIÊN =================
 function hashPw(pw, salt) {
   var bytes = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256,
     String(salt) + '|' + String(pw), Utilities.Charset.UTF_8);
@@ -134,40 +181,49 @@ function sessionUser(payload) {
   if (!token) return null;
   var uid = CacheService.getScriptCache().get('sess_' + token);
   if (!uid) return null;
-  return readAll(SHEET_USERS).filter(function (u) {
-    return Number(u.id) === Number(uid) && Number(u.active) === 1;
-  })[0] || null;
+  var users = readAll(SHEET_USERS, true);
+  for (var i = 0; i < users.length; i++) {
+    if (Number(users[i].id) === Number(uid) && Number(users[i].active) === 1) return users[i];
+  }
+  return null;
 }
 
-/** Nâng cấp bảng Users cũ: thêm cột username, password_hash, salt (mật khẩu mặc định 123456). */
+/** Nâng cấp bảng Users cũ — CHẠY 1 LẦN (có cờ trong Properties). */
 function migrate_() {
+  if (props_().getProperty('users_migrated') === '1') return;
   var sh = sheetByName(SHEET_USERS);
   var headers = sh.getRange(1, 1, 1, Math.max(sh.getLastColumn(), 1)).getValues()[0]
     .map(function (h) { return String(h || ''); });
   var need = HEADERS.Users.filter(function (h) { return headers.indexOf(h) < 0; });
-  if (!need.length) return;
-  var newHeaders = headers.filter(function (h) { return h; });
-  HEADERS.Users.forEach(function (h) { if (newHeaders.indexOf(h) < 0) newHeaders.push(h); });
-  sh.getRange(1, 1, 1, newHeaders.length).setValues([newHeaders]).setFontWeight('bold');
-  readAll(SHEET_USERS).forEach(function (u) {
-    var salt = newSalt();
-    updateById(SHEET_USERS, u.id, {
-      username: String(u.username || u.email || ('user' + u.id)),
-      salt: salt,
-      password_hash: hashPw(DEFAULT_PW, salt)
+  if (need.length) {
+    var newHeaders = headers.filter(function (h) { return h; });
+    HEADERS.Users.forEach(function (h) { if (newHeaders.indexOf(h) < 0) newHeaders.push(h); });
+    sh.getRange(1, 1, 1, newHeaders.length).setValues([newHeaders]).setFontWeight('bold');
+    readAllRaw_(SHEET_USERS).forEach(function (u) {
+      var salt = newSalt();
+      updateById(SHEET_USERS, u.id, {
+        username: String(u.username || u.email || ('user' + u.id)),
+        salt: salt,
+        password_hash: hashPw(DEFAULT_PW, salt)
+      });
     });
-  });
+  }
+  invalidate_(SHEET_USERS);
+  props_().setProperty('users_migrated', '1');
 }
 
-// ---------------- đăng nhập ----------------
+// ================= ĐĂNG NHẬP =================
 function login(p) {
   var uname = String(p.username || '').toLowerCase().trim();
   var pw = String(p.password || '');
   if (!uname || !pw) return { ok: false, error: 'Nhập đủ tài khoản và mật khẩu.' };
-  var u = readAll(SHEET_USERS).filter(function (x) {
-    return Number(x.active) === 1 &&
-      (String(x.username || '').toLowerCase() === uname || String(x.email || '').toLowerCase() === uname);
-  })[0];
+  var users = readAll(SHEET_USERS, true);
+  var u = null;
+  for (var i = 0; i < users.length; i++) {
+    var x = users[i];
+    if (Number(x.active) === 1 &&
+      (String(x.username || '').toLowerCase() === uname || String(x.email || '').toLowerCase() === uname)) { u = x; break; }
+  }
   if (!u || !u.password_hash || hashPw(pw, u.salt) !== u.password_hash) {
     return { ok: false, error: 'Sai tài khoản hoặc mật khẩu.' };
   }
@@ -188,18 +244,18 @@ function changePassword(p) {
   return withLock(function () {
     var salt = newSalt();
     updateById(SHEET_USERS, u.id, { salt: salt, password_hash: hashPw(newPw, salt) });
+    invalidate_(SHEET_USERS);
+    bumpVer_();
     addLog('', u, 'Đổi mật khẩu', '');
     return { ok: true };
   });
 }
 
-// ---------------- truy vấn ----------------
+// ================= TRUY VẤN =================
 function getState(p) {
   var u = sessionUser(p);
   return {
-    ok: true,
-    needLogin: !u,
-    user: u ? pubUser(u) : null,
+    ok: true, needLogin: !u, user: u ? pubUser(u) : null,
     roles: ROLES, status: STATUS, sigTitles: SIG_TITLES, confirmTexts: CONFIRM_TEXT
   };
 }
@@ -209,9 +265,7 @@ function pubUser(u) {
     title: u.title, department: u.department, roles: rolesOf(u), active: Number(u.active) === 1
   };
 }
-function needUser(me) {
-  return me ? null : 'NOT_ALLOWED';
-}
+function needUser(me) { return me ? null : 'NOT_ALLOWED'; }
 function canSign(me, req, sigType) {
   if (!me) return false;
   if (sigType === 'de_nghi') return identMatch(req.requester_email, me);
@@ -240,20 +294,36 @@ function getSigs(reqId) {
   return out;
 }
 function getReq(id) {
-  return readAll(SHEET_REQUESTS).filter(function (r) { return Number(r.id) === Number(id); })[0] || null;
+  var rows = readAll(SHEET_REQUESTS);
+  for (var i = 0; i < rows.length; i++) {
+    if (Number(rows[i].id) === Number(id)) return rows[i];
+  }
+  return null;
 }
+
+/** Danh sách — CACHE THEO PHIÊN BẢN DỮ LIỆU: chỉ đổi khi có thao tác ghi. */
 function listRequests(me, p) {
   var err = needUser(me); if (err) return { ok: false, error: err };
-  var q = String(p.q || '').toLowerCase();
+  var q = String(p.q || '').toLowerCase().slice(0, 40);
   var status = p.status || '';
-  var items = readAll(SHEET_REQUESTS).filter(function (r) {
-    if (status && r.status !== status) return false;
-    if (!q) return true;
-    return [r.ten_benh_nhan, r.ma_kcb, r.code, r.ma_the_bhyt, r.ten_nguoi_nghi]
-      .join(' ').toLowerCase().indexOf(q) >= 0;
-  }).sort(function (a, b) { return Number(b.id) - Number(a.id); })
-    .map(function (r) { return { req: r, myAction: eligibleSig(me, r) }; });
-  return { ok: true, items: items };
+  var cache = CacheService.getScriptCache();
+  var key = 'lst:' + getVer_() + ':' + q + ':' + status + ':' + Number(me.id);
+  var hit = cache.get(key);
+  if (hit) return JSON.parse(hit);
+
+  var rows = readAll(SHEET_REQUESTS);
+  var items = [];
+  for (var i = rows.length - 1; i >= 0; i--) {
+    var r = rows[i];
+    if (status && r.status !== status) continue;
+    if (q && [r.ten_benh_nhan, r.ma_kcb, r.code, r.ma_the_bhyt, r.ten_nguoi_nghi]
+      .join(' ').toLowerCase().indexOf(q) < 0) continue;
+    items.push({ req: r, myAction: eligibleSig(me, r) });
+  }
+  items.sort(function (a, b) { return Number(b.req.id) - Number(a.req.id); });
+  var out = { ok: true, items: items };
+  try { cache.put(key, JSON.stringify(out), 120); } catch (e) {}
+  return out;
 }
 function getRequest(me, p) {
   var err = needUser(me); if (err) return { ok: false, error: err };
@@ -267,11 +337,11 @@ function getRequest(me, p) {
 }
 function usersForSelect(me) {
   var err = needUser(me); if (err) return { ok: false, error: err };
-  return { ok: true, users: readAll(SHEET_USERS)
+  return { ok: true, users: readAll(SHEET_USERS, true)
     .filter(function (u) { return Number(u.active) === 1; }).map(pubUser) };
 }
 
-// ---------------- tạo / sửa / xóa phiếu ----------------
+// ================= TẠO / SỬA / XÓA PHIẾU =================
 var REQ_FIELDS = ['requester_email', 'ten_nguoi_nghi', 'chuc_danh', 'khoa', 'ten_benh_nhan',
   'nam_sinh', 'ma_kcb', 'ngay_vao_vien', 'ngay_ra_vien', 'ma_the_bhyt', 'ly_do_sai', 'noi_dung_sai'];
 
@@ -307,6 +377,7 @@ function createRequest(me, p) {
       });
       updateById(SHEET_REQUESTS, id, { status: 'cho_khtb', updated_at: now() });
     }
+    bumpVer_();
     addLog(id, me, 'Tạo phiếu', 'Mã phiếu ' + code);
     if (kyNgay) addLog(id, me, 'Xác nhận (Ký điện tử)', SIG_TITLES.de_nghi);
     return { ok: true, id: id, code: code };
@@ -324,6 +395,7 @@ function updateRequest(me, p) {
   return withLock(function () {
     d.updated_at = now();
     updateById(SHEET_REQUESTS, req.id, d);
+    bumpVer_();
     addLog(req.id, me, 'Cập nhật nội dung phiếu', '');
     return { ok: true };
   });
@@ -336,6 +408,7 @@ function resubmitRequest(me, p) {
     return { ok: false, error: 'Không thể gửi lại phiếu này.' };
   return withLock(function () {
     updateById(SHEET_REQUESTS, req.id, { status: 'cho_de_nghi', ly_do_tra_lai: '', updated_at: now() });
+    bumpVer_();
     addLog(req.id, me, 'Gửi lại phiếu sau khi bị trả lại', '');
     return { ok: true };
   });
@@ -349,11 +422,12 @@ function deleteRequest(me, p) {
     deleteRows(SHEET_SIGNATURES, function (s) { return Number(s.request_id) === Number(req.id); });
     deleteRows(SHEET_LOGS, function (l) { return Number(l.request_id) === Number(req.id); });
     deleteRows(SHEET_REQUESTS, function (r) { return Number(r.id) === Number(req.id); });
+    bumpVer_();
     return { ok: true };
   });
 }
 
-// ---------------- ký xác nhận ----------------
+// ================= KÝ XÁC NHẬN =================
 function confirmSig(me, p) {
   var err = needUser(me); if (err) return { ok: false, error: err };
   var sigType = p.sig_type;
@@ -372,6 +446,7 @@ function confirmSig(me, p) {
       note: note, signed_at: now()
     });
     updateById(SHEET_REQUESTS, req.id, { status: NEXT_STATUS[sigType], updated_at: now() });
+    bumpVer_();
     addLog(req.id, me, 'Xác nhận (Ký điện tử)',
       SIG_TITLES[sigType] + (note ? ' — Ý kiến: ' + note : ''));
     return { ok: true };
@@ -390,16 +465,17 @@ function returnRequest(me, p) {
   return withLock(function () {
     deleteRows(SHEET_SIGNATURES, function (s) { return Number(s.request_id) === Number(req.id); });
     updateById(SHEET_REQUESTS, req.id, { status: 'tra_lai', ly_do_tra_lai: lyDo, updated_at: now() });
+    bumpVer_();
     addLog(req.id, me, 'Trả lại phiếu', 'Lý do: ' + lyDo);
     return { ok: true };
   });
 }
 
-// ---------------- quản trị tài khoản ----------------
+// ================= QUẢN TRỊ TÀI KHOẢN =================
 function listUsers(me) {
   var err = needUser(me); if (err) return { ok: false, error: err };
   if (!hasRole(me, 'admin')) return { ok: false, error: 'Chỉ quản trị mới xem được danh sách tài khoản.' };
-  return { ok: true, users: readAll(SHEET_USERS).map(pubUser) };
+  return { ok: true, users: readAll(SHEET_USERS, true).map(pubUser) };
 }
 
 function saveUser(me, p) {
@@ -414,7 +490,7 @@ function saveUser(me, p) {
   var roles = ['nhap', 'khtb', 'taichinh', 'admin'].filter(function (r) { return p['role_' + r]; }).join(',');
   var active = p.active ? 1 : 0;
   return withLock(function () {
-    var users = readAll(SHEET_USERS);
+    var users = readAll(SHEET_USERS, true);
     var exist = users.filter(function (u) {
       return String(u.username || u.email || '').toLowerCase().trim() === username;
     })[0];
@@ -447,6 +523,8 @@ function saveUser(me, p) {
       });
       addLog('', me, 'Thêm tài khoản', username);
     }
+    invalidate_(SHEET_USERS);
+    bumpVer_();
     return { ok: true };
   });
 }
