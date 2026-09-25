@@ -43,7 +43,8 @@
       </td>
       <td class="nowrap">
         <a class="btn small" href="{{ url_for('detail', req_id=r.id) }}">Xem</a>
-        <a class="btn small" href="{{ url_for('pdf', req_id=r.id) }}">PDF</a>
+        <a class="btn small" target="_blank" rel="noopener"
+           href="{{ url_for('pdf', req_id=r.id, name=(r.code ~ '.pdf')) }}?mode=view">PDF</a>
       </td>
     </tr>
     {% else %}

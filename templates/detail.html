@@ -4,7 +4,10 @@
 <div class="page-head">
   <h1>Giấy đề nghị sửa HSBA điện tử <span class="code-big">{{ req.code }}</span></h1>
   <div class="btns">
-    <a class="btn" href="{{ url_for('pdf', req_id=req.id) }}">⬇ Tải PDF (mẫu giấy)</a>
+    <a class="btn" target="_blank" rel="noopener"
+       href="{{ url_for('pdf', req_id=req.id, name=(req.code ~ '.pdf')) }}?mode=view">👁 Xem PDF</a>
+    <a class="btn"
+       href="{{ url_for('pdf', req_id=req.id, name=(req.code ~ '.pdf')) }}">⬇ Tải PDF (mẫu giấy)</a>
     {% if can_edit %}
     <a class="btn" href="{{ url_for('edit_request', req_id=req.id) }}">Sửa nội dung</a>
     {% endif %}

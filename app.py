@@ -465,14 +465,25 @@ def detail(req_id):
 
 
 @app.route("/p/<int:req_id>/pdf")
+@app.route("/p/<int:req_id>/pdf/<name>")
 @login_required
-def pdf(req_id):
+def pdf(req_id, name=None):
     req = get_request_or_404(req_id)
     sigs = get_sigs(req_id)
     os.makedirs(EXPORTS_DIR, exist_ok=True)
     out = os.path.join(EXPORTS_DIR, f"{req['code']}.pdf")
     export_pdf(dict(req), {k: dict(v) for k, v in sigs.items()}, out)
-    return send_file(out, as_attachment=True, download_name=f"{req['code']}.pdf")
+    view = request.args.get("mode") == "view"
+    resp = send_file(
+        out,
+        mimetype="application/pdf",
+        as_attachment=not view,           # mode=view: mở trong trình xem PDF của trình duyệt
+        download_name=f"{req['code']}.pdf",
+        max_age=0,
+    )
+    resp.headers["X-Content-Type-Options"] = "nosniff"
+    resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
+    return resp
 
 
 # ---------------------------------------------------------------- quản trị
