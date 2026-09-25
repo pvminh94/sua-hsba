@@ -59,22 +59,33 @@ echo "  Cổng web       : $PORT"
 # ---------- [1/7] Hệ điều hành & Python 3 ----------
 step "1/7" "Kiểm tra hệ điều hành & cài Python 3 (nếu thiếu)..."
 OS="$(uname -s)"
-if [ "$OS" = "Linux" ]; then
-  if command -v apt-get >/dev/null 2>&1; then
-    SUDO_APT=""; [ "$(id -u)" != 0 ] && SUDO_APT="sudo"
-    $SUDO_APT apt-get update -qq
-    $SUDO_APT apt-get install -y -qq python3 python3-pip python3-venv git curl
-  elif command -v dnf >/dev/null 2>&1; then
-    SUDO_DNF=""; [ "$(id -u)" != 0 ] && SUDO_DNF="sudo"
-    $SUDO_DNF dnf install -y -q python3 python3-pip git curl
-  elif command -v yum >/dev/null 2>&1; then
-    SUDO_YUM=""; [ "$(id -u)" != 0 ] && SUDO_YUM="sudo"
-    $SUDO_YUM yum install -y -q python3 python3-pip git curl
-  else
-    warn "Không nhận diện được trình quản lý gói — giả sử Python 3 đã có sẵn."
+NEED_PKGS=""
+command -v python3 >/dev/null 2>&1 || NEED_PKGS="$NEED_PKGS python3 python3-pip"
+if command -v python3 >/dev/null 2>&1 && ! python3 -c "import venv, ensurepip" >/dev/null 2>&1; then
+  NEED_PKGS="$NEED_PKGS python3-venv"     # Debian/Ubuntu tách riêng gói venv
+fi
+command -v git >/dev/null 2>&1 || NEED_PKGS="$NEED_PKGS git"
+command -v curl >/dev/null 2>&1 || NEED_PKGS="$NEED_PKGS curl"
+
+if [ -n "$NEED_PKGS" ]; then
+  warn "Cần cài thêm:$NEED_PKGS"
+  if [ "$OS" = "Linux" ]; then
+    if command -v apt-get >/dev/null 2>&1; then
+      APT="apt-get"; [ "$(id -u)" != 0 ] && APT="sudo apt-get"
+      $APT update -qq && $APT install -y -qq python3 python3-pip python3-venv git curl \
+        || warn "Cài đặt bằng apt-get thất bại (thiếu quyền root?)"
+    elif command -v dnf >/dev/null 2>&1; then
+      DNF="dnf"; [ "$(id -u)" != 0 ] && DNF="sudo dnf"
+      $DNF install -y -q python3 python3-pip git curl || warn "Cài đặt bằng dnf thất bại"
+    elif command -v yum >/dev/null 2>&1; then
+      YUM="yum"; [ "$(id -u)" != 0 ] && YUM="sudo yum"
+      $YUM install -y -q python3 python3-pip git curl || warn "Cài đặt bằng yum thất bại"
+    else
+      warn "Không nhận diện được trình quản lý gói — hãy cài tay:$NEED_PKGS"
+    fi
+  elif [ "$OS" = "Darwin" ]; then
+    command -v brew >/dev/null 2>&1 && brew install python3 git || warn "Cần Homebrew để cài Python 3"
   fi
-elif [ "$OS" = "Darwin" ]; then
-  command -v python3 >/dev/null 2>&1 || brew install python3
 fi
 command -v python3 >/dev/null 2>&1 || die "Chưa cài được Python 3. Hãy cài Python 3 rồi chạy lại script."
 python3 - << 'PYV' || die "Cần Python >= 3.8"
@@ -115,7 +126,17 @@ if [ "$(id -u)" = 0 ]; then chown -R "$RUN_USER" "$DEST"; fi
 # ---------- [3/7] Môi trường ảo & thư viện ----------
 step "3/7" "Tạo môi trường ảo Python & cài thư viện (Flask, fpdf2, waitress)..."
 if [ ! -x "$DEST/.venv/bin/python" ]; then
-  as_run_user python3 -m venv "$DEST/.venv"
+  if ! as_run_user python3 -m venv "$DEST/.venv" 2>/dev/null; then
+    warn "Thiếu gói python3-venv — thử cài bổ sung rồi tạo lại..."
+    if command -v apt-get >/dev/null 2>&1; then
+      APT="apt-get"; [ "$(id -u)" != 0 ] && APT="sudo apt-get"
+      $APT install -y -qq python3-venv
+    elif command -v dnf >/dev/null 2>&1; then
+      DNF="dnf"; [ "$(id -u)" != 0 ] && DNF="sudo dnf"
+      $DNF install -y -q python3-pip
+    fi
+    as_run_user python3 -m venv "$DEST/.venv" || die "Không tạo được môi trường ảo Python."
+  fi
 fi
 as_run_user "$DEST/.venv/bin/python" -m pip install --quiet --upgrade pip
 as_run_user "$DEST/.venv/bin/python" -m pip install --quiet -r "$DEST/requirements.txt"
