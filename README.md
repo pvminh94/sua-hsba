@@ -15,7 +15,8 @@ curl -fsSL https://raw.githubusercontent.com/pvminh94/sua-hsba/main/install.sh |
 ```
 
 Script tự động: cài Python 3 + git → tải mã nguồn về `/opt/sua-hsba` → cài thư viện →
-khởi tạo dữ liệu → cài dịch vụ chạy nền (tự khởi động cùng máy) → mở tường lửa cổng 8000 →
+khởi tạo dữ liệu → cài dịch vụ chạy nền (tự khởi động cùng máy) → mở tường lửa →
+**tự phát hiện cổng bị ứng dụng khác chiếm (vd: ERPNext) và chuyển sang cổng trống** →
 kiểm tra hoạt động → in thông tin truy cập. Chạy lại lần nữa cũng không sao.
 
 Tùy chỉnh: `PORT=8080 APP_DIR=/opt/hsba curl -fsSL ... | sudo bash`

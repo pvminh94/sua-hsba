@@ -149,9 +149,27 @@ ok "Cơ sở dữ liệu đã tạo (nếu đã có dữ liệu thì giữ nguy�
 
 # ---------- [5/7] Dịch vụ chạy nền ----------
 step "5/7" "Cài dịch vụ chạy nền..."
+
+# dừng bản cũ (nếu có) để kiểm tra cổng trống
+if command -v systemctl >/dev/null 2>&1 && [ "$(id -u)" = 0 ]; then
+  systemctl stop "$SERVICE_NAME" >/dev/null 2>&1 || true
+fi
+pkill -f "$DEST/.venv/bin/python $DEST/app.py" >/dev/null 2>&1 || true
+
+# tìm cổng trống — tránh cổng bị ứng dụng khác chiếm (ví dụ ERPNext/frappe)
+port_busy() { ss -ltn 2>/dev/null | awk '{print $4}' | grep -qE "[:.]$1$"; }
+PORT_WANTED="$PORT"
+while port_busy "$PORT"; do
+  warn "Cổng $PORT đã bị ứng dụng khác chiếm (có thể là ERPNext/frappe) → thử cổng $((PORT+1))"
+  PORT=$((PORT+1))
+  [ "$PORT" -gt "$((PORT_WANTED+30))" ] && die "Không tìm được cổng trống. Hãy chạy lại với PORT=<cổng còn trống>."
+done
+[ "$PORT" != "$PORT_WANTED" ] && ok "Sẽ dùng cổng trống: $PORT"
+
 cat > "$DEST/start.sh" << EOF
 #!/usr/bin/env bash
 cd "\$(dirname "\$0")"
+export PORT=$PORT
 exec .venv/bin/python app.py
 EOF
 chmod +x "$DEST/start.sh"
@@ -177,13 +195,14 @@ EOF
   systemctl daemon-reload
   systemctl enable --now "$SERVICE_NAME" >/dev/null 2>&1
   systemctl restart "$SERVICE_NAME"
+  sleep 2
+  if ! systemctl is-active --quiet "$SERVICE_NAME"; then
+    echo "--------- 10 dòng log gần nhất ---------"
+    journalctl -u "$SERVICE_NAME" -n 10 --no-pager || true
+    die "Dịch vụ '$SERVICE_NAME' không khởi động được (xem log trên)."
+  fi
   ok "Dịch vụ '$SERVICE_NAME' đã bật (tự chạy khi khởi động máy)"
 else
-  if [ "$(id -u)" = 0 ] || [ -w /etc/crontab ]; then
-    warn "Không có systemd — tạo tệp start.sh để chạy thủ công"
-  fi
-  # chạy nền bằng nohup để dùng ngay
-  pkill -f "$DEST/.venv/bin/python $DEST/app.py" >/dev/null 2>&1 || true
   (cd "$DEST" && nohup .venv/bin/python app.py > "$DEST/app.log" 2>&1 &) \
     && ok "Đã khởi động nền (log: $DEST/app.log)"
   warn "Muốn tự chạy khi khởi động máy: thêm dòng sau vào 'crontab -e':"
